@@ -1,0 +1,4 @@
+/**:
+  ros__parameters:
+    encryption/key_size : 24
+    encryption/qos_tcp : false 
