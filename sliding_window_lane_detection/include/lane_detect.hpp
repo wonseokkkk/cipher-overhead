@@ -27,8 +27,21 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/float32.hpp"
 
+#include <cryptopp/aes.h>
+#include <cryptopp/filters.h>
+#include <cryptopp/modes.h>
+#include <cryptopp/osrng.h>
+#include <cryptopp/hex.h>
 
 #define _GUN_SOURCE
+
+extern "C" {
+    #include <err.h>
+    #include <stdio.h>
+    #include <string.h>
+    #include <tee_client_api.h>
+//  #include <secure_storage_ta.h>
+}
 
 using namespace cv;
 using namespace std;
@@ -41,6 +54,23 @@ class LaneDetector : public rclcpp::Node
 public:
   LaneDetector();
   ~LaneDetector();
+
+  CryptoPP::SecByteBlock key;
+  CryptoPP::SecByteBlock iv;
+
+  int keylength;
+
+  struct test_ctx {
+      TEEC_Context ctx;
+      TEEC_Session sess;
+  };
+  char id[7] = "key_id";
+  LaneDetector::test_ctx ctx;
+
+  void initialize_tee(LaneDetector::test_ctx *ctx);
+  TEEC_Result save_key(LaneDetector::test_ctx *ctx, char *id, char *data, size_t data_len);
+  TEEC_Result load_key(LaneDetector::test_ctx *ctx, char *id, char *data, size_t data_len);
+  std::string decrypt(const std::string& plaintext);
 
   //Timer
   struct timeval start_, end_;
@@ -70,7 +100,9 @@ public:
   std::ofstream csv_file_; // CSV 파일 스트림
 
   bool ciphermode;
+  bool tcp;
   string topicname;
+  int csv_cnt = 0;
 private:
   void LoadParams(void);
   int arrMaxIdx(int hist[], int start, int end, int Max);

@@ -22,6 +22,16 @@
 #include "std_msgs/msg/header.hpp"
 
 #include <opencv2/opencv.hpp>
+#include <QApplication>
+#include <QLabel>
+#include <QPixmap>
+#include <QBitmap>
+#include <QImage>
+#include <QWidget>
+#include <QVBoxLayout>
+#include <QPainter>
+#include <QThread>
+#include "ui_cluster.h"
 
 //ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -36,16 +46,27 @@
 
 #define _GUN_SOURCE
 
+extern "C" {
+    #include <err.h>
+    #include <stdio.h>
+    #include <string.h>
+    #include <tee_client_api.h>
+//  #include <secure_storage_ta.h>
+}
+
 using namespace cv;
 using namespace std;
 using namespace std::chrono_literals;
 
 namespace Decrypt {
 
-class Decryption : public rclcpp::Node
+class Decryption : public QObject, public rclcpp::Node
 {
+
+  Q_OBJECT
+
 public:
-  Decryption();
+  Decryption(Ui::MainWindow* ui);
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr ImageSubscriber_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr DecryptedImagePublisher_;
 
@@ -57,9 +78,23 @@ public:
   bool tcp;
   int keylength;
 
+  struct test_ctx {
+      TEEC_Context ctx;
+      TEEC_Session sess;
+  };
+
+  Decryption::test_ctx ctx;
+  void initialize_tee(Decryption::test_ctx *ctx);
   void initialize_aes();
+  TEEC_Result save_key(Decryption::test_ctx *ctx, char *id, char *data, size_t data_len);
+  TEEC_Result load_key(Decryption::test_ctx *ctx, char *id, char *data, size_t data_len);
   std::string decrypt(const std::string& plaintext);
   void DecryptionCallback(const sensor_msgs::msg::Image::SharedPtr msg);
+  char id[7] = "key_id";
+  
+  Ui::MainWindow* ui_;
+//  QLabel* cameraLabel_;
+
 private:
 
 };

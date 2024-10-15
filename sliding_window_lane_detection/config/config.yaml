@@ -1,3 +1,4 @@
 /**:
   ros__parameters:
-    encryption_mode : false
+    encryption_mode : true
+    qos_tcp : false

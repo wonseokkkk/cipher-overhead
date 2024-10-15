@@ -18,6 +18,7 @@
   <depend>ament_index_cpp</depend>
   <depend>cv_bridge</depend>
   <depend>OpenCV</depend>
+  <exec_depend>qt5</exec_depend>
 
 
   <test_depend>ament_lint_auto</test_depend>

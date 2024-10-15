@@ -16,10 +16,20 @@ find_package(OpenCV REQUIRED PATHS "/usr/include/opencv4")
 find_package(cv_bridge REQUIRED)
 #find_package(MbedTLS REQUIRED)
 find_library(CRYPTOPP_LIB cryptopp)
+find_library(TEEC_LIB teec)
+find_package(Qt5 REQUIRED COMPONENTS Widgets)
+
+set(UI_FILES ${CMAKE_CURRENT_SOURCE_DIR}/ui/cluster.ui)
+
+qt5_wrap_ui(UI_HEADERS ${UI_FILES})
+#set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTOMOC ON)
 
 set(PROJECT_SOURCES
   src/decrypt_data.cpp
-
+  #  src/ui_cluster.h
+  ${UI_FILES}
+  ${UI_HEADERS}
   include/decrypt_data.hpp
 )
 
@@ -29,15 +39,22 @@ set(PROJECT_SOURCES_DEPENDENCIES
   sensor_msgs
   ament_index_cpp
   cv_bridge
+  OpenCV
 )
 
 include_directories(
   include
   ${OpenCV_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+include_directories(
+  /usr/include
 )
 
 add_executable(decryption_node ${PROJECT_SOURCES})
 ament_target_dependencies(decryption_node ${PROJECT_SOURCES_DEPENDENCIES})
+target_link_libraries(decryption_node Qt5::Widgets)
 
 #target_link_libraries(encryption_node
 #	PUBLIC MbedTLS::mbedtls
@@ -45,6 +62,7 @@ ament_target_dependencies(decryption_node ${PROJECT_SOURCES_DEPENDENCIES})
 #	       MbedTLS::mbedx509)
 target_link_libraries(decryption_node ${CRYPTOPP_LIB})
 
+target_link_libraries(decryption_node ${TEEC_LIB})
 install(TARGETS 
   decryption_node
   DESTINATION lib/${PROJECT_NAME}

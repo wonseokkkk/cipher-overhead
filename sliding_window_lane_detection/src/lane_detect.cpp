@@ -1,5 +1,8 @@
 #include "lane_detect.hpp"
-
+#define TA_SECURE_STORAGE_UUID \
+        {0xf4e750bb, 0x1437, 0x4fbf, \
+                {0x87, 0x85, 0x8d, 0x35, 0x80, 0xc3, 0x49, 0x93}}
+////
 namespace LaneDetect {
 
 LaneDetector::LaneDetector()
@@ -7,19 +10,35 @@ LaneDetector::LaneDetector()
                               .allow_undeclared_parameters(true)
                               .automatically_declare_parameters_from_overrides(true))
 {
+
+  this->get_parameter_or("key_size", keylength, 16);
+  this->get_parameter_or("qos_tcp", tcp, false);
+  key = CryptoPP::SecByteBlock(0x00, keylength);
+  iv = CryptoPP::SecByteBlock(0x00, CryptoPP::AES::BLOCKSIZE);
+
+  initialize_tee(&ctx);
+  save_key(&ctx, id, reinterpret_cast<char*>(key.data()), key.size());
+  rclcpp::QoS default_qos(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data));
+  default_qos.best_effort();
+
+
   this->get_parameter_or("encryption_mode", ciphermode, true);
   if(ciphermode){
     topicname = "/decrypted_image";
   }
   else topicname = "/camera1/image_raw";
 
+  this->get_parameter_or("qos_tcp", tcp, true);
+  rclcpp::QoS qos(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data));
+  if(tcp){
+    qos.reliable();
+  }
+  else qos.best_effort();
+
   /************************/
   /* Ros Topic Subscriber */
   /************************/
-  rclcpp::QoS qos(rclcpp::QoSInitialization::from_rmw(rmw_qos_profile_sensor_data));
-  qos.best_effort();
-
-  ImageSubscriber_ = this->create_subscription<sensor_msgs::msg::Image>(topicname, qos, std::bind(&LaneDetector::ImageSubCallback, this, std::placeholders::_1));
+  ImageSubscriber_ = this->create_subscription<sensor_msgs::msg::Image>("encrypted_image", default_qos, std::bind(&LaneDetector::ImageSubCallback, this, std::placeholders::_1));
 //  ImageSubscriber_ = this->create_subscription<sensor_msgs::msg::Image>("/camera1/image_raw", qos, std::bind(&LaneDetector::ImageSubCallback, this, std::placeholders::_1));
 //  ImageSubscriber_ = this->create_subscription<sensor_msgs::msg::Image>("decrypted_image", qos, std::bind(&LaneDetector::ImageSubCallback, this, std::placeholders::_1));
 
@@ -149,6 +168,108 @@ LaneDetector::~LaneDetector(void)
   RCLCPP_INFO(this->get_logger(), "Stop.");
 }
 
+void LaneDetector::initialize_tee(LaneDetector::test_ctx *ctx)
+{
+    TEEC_UUID uuid = TA_SECURE_STORAGE_UUID;
+    uint32_t origin;
+    TEEC_Result res;
+
+    res = TEEC_InitializeContext(NULL, &ctx->ctx);
+    if (res != TEEC_SUCCESS)
+        errx(1, "TEEC_InitializeContext failed with code 0x%x", res);
+
+    res = TEEC_OpenSession(&ctx->ctx, &ctx->sess, &uuid, TEEC_LOGIN_PUBLIC, NULL, NULL, &origin);
+    if (res != TEEC_SUCCESS)
+            errx(1, "TEEC_Opensession failed with code 0x%x origin 0x%x", res, origin);
+}
+
+TEEC_Result LaneDetector::save_key(LaneDetector::test_ctx *ctx, char *id, char *data, size_t data_len)
+{
+    TEEC_Operation op;
+    uint32_t origin;
+    TEEC_Result res;
+    size_t id_len = strlen(id);
+
+    memset(&op, 0, sizeof(op));
+    op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT,
+                                     TEEC_MEMREF_TEMP_INPUT,
+                                     TEEC_NONE, TEEC_NONE);
+
+    op.params[0].tmpref.buffer = id;
+    op.params[0].tmpref.size = id_len;
+
+    op.params[1].tmpref.buffer = data;
+    op.params[1].tmpref.size = data_len;
+
+    res = TEEC_InvokeCommand(&ctx->sess, 1, &op, &origin);
+    memset(&op, 0, sizeof(op));
+
+    if (res != TEEC_SUCCESS)
+        errx(1, "Command WRITE failed: 0x%x / %u\n", res, origin);
+
+    switch (res) {
+    case TEEC_SUCCESS:
+        break;
+    default:
+        errx(1, "Command WRITE failed: 0x%x / %u\n", res, origin);
+    }
+    return res;
+}
+
+TEEC_Result LaneDetector::load_key(LaneDetector::test_ctx *ctx, char *id, char *data, size_t data_len)
+{
+        TEEC_Operation op;
+        uint32_t origin;
+        TEEC_Result res;
+        size_t id_len = strlen(id);
+
+        memset(&op, 0, sizeof(op));
+        op.paramTypes = TEEC_PARAM_TYPES(TEEC_MEMREF_TEMP_INPUT,
+                                         TEEC_MEMREF_TEMP_OUTPUT,
+                                         TEEC_NONE, TEEC_NONE);
+
+        op.params[0].tmpref.buffer = id;
+        op.params[0].tmpref.size = id_len;
+
+        op.params[1].tmpref.buffer = data;
+        op.params[1].tmpref.size = data_len;
+
+        res = TEEC_InvokeCommand(&ctx->sess, 0, &op, &origin);
+
+        memset(&op, 0, sizeof(op));
+        switch (res) {
+        case TEEC_SUCCESS:
+        case TEEC_ERROR_SHORT_BUFFER:
+        case TEEC_ERROR_ITEM_NOT_FOUND:
+            break;
+        default:
+            errx(1, "Command READ failed: 0x%x / %u\n", res, origin);
+        }
+        return res;
+}
+
+std::string LaneDetector::decrypt(const std::string& ciphertext)
+{
+    std::string decryptedtext;
+
+    char saved_key[keylength];
+    load_key(&ctx, id, saved_key, keylength);
+    CryptoPP::SecByteBlock key_string(reinterpret_cast<const unsigned char*>(saved_key), strlen(saved_key));
+    CryptoPP::AES::Decryption aesDecryption(key_string, keylength);
+    //CryptoPP::AES::Decryption aesDecryption(key, keylength);
+    CryptoPP::CBC_Mode_ExternalCipher::Decryption cbcDecryption(aesDecryption, iv);
+    CryptoPP::StreamTransformationFilter stfDecryptor(cbcDecryption, new CryptoPP::StringSink(decryptedtext));
+    stfDecryptor.Put(reinterpret_cast<const unsigned char*>(ciphertext.c_str()), ciphertext.size());
+    stfDecryptor.MessageEnd();
+
+    if(decryptedtext != ""){
+      RCLCPP_INFO(this->get_logger(), "Keysize = %i", keylength);
+    }
+
+    return decryptedtext;
+
+}
+
 void LaneDetector::lanedetectInThread()
 {
   double diff_time=0.0, CycleTime_=0.0;
@@ -208,26 +329,36 @@ void LaneDetector::lanedetectInThread()
 
 void LaneDetector::ImageSubCallback(const sensor_msgs::msg::Image::SharedPtr msg)
 {
-  static cv::Mat prev_img;
+  // 암호화된 데이터를 문자열로 변환
+  std::string encrypted_msg(reinterpret_cast<const char*>(msg->data.data()), msg->data.size());
 
-  cv_bridge::CvImagePtr cam_image;
-  try{
-    cam_image = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-  } catch (cv_bridge::Exception& e) {
-    RCLCPP_ERROR(this->get_logger(), "cv_bridge exception : %s", e.what());
-  }
+  // 복호화
+  std::string decrypted_msg = decrypt(encrypted_msg);
 
-  if(!cam_image->image.empty()) {
+  // 메시지
+  auto decrypted_image_msg = std::make_shared<sensor_msgs::msg::Image>(*msg);
+  decrypted_image_msg->data.assign(decrypted_msg.begin(), decrypted_msg.end());
 
-    camImageCopy_ = cam_image->image.clone();
-    prev_img = camImageCopy_;
-    imageStatus_ = true;
-    cam_new_frame_arrived = true;
-    cam_condition_variable.notify_one();
-  }
-  else if(!prev_img.empty()) {
-    camImageCopy_ = prev_img;
-  }
+//  static cv::Mat prev_img;
+//
+//  cv_bridge::CvImagePtr cam_image;
+//  try{
+//    cam_image = cv_bridge::toCvCopy(decrypted_image_msg, sensor_msgs::image_encodings::BGR8);
+//  } catch (cv_bridge::Exception& e) {
+//    RCLCPP_ERROR(this->get_logger(), "cv_bridge exception : %s", e.what());
+//  }
+//
+//  if(!cam_image->image.empty()) {
+//
+//    camImageCopy_ = cam_image->image.clone();
+//    prev_img = camImageCopy_;
+//    imageStatus_ = true;
+//    cam_new_frame_arrived = true;
+//    cam_condition_variable.notify_one();
+//  }
+//  else if(!prev_img.empty()) {
+//    camImageCopy_ = prev_img;
+//  }
 }
 
 int LaneDetector::arrMaxIdx(int hist[], int start, int end, int Max) {
@@ -979,9 +1110,14 @@ float LaneDetector::display_img(Mat _frame, int _delay, bool _view) {
 
   if (csv_file_.is_open()) {
             csv_file_ << rclcpp::Clock().now().seconds() << ", " << fps << std::endl;
+            csv_cnt++;
+	    if(csv_cnt>2000) {csv_file_.close();
+	      RCLCPP_INFO(this->get_logger(), "Stop.");
+	    }
+
         }
 
-
+    
 
   sliding_frame = detect_lines_sliding_window(binary_frame, _view);
   get_lane_coef();

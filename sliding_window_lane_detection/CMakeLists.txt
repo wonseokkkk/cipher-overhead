@@ -15,6 +15,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(OpenCV REQUIRED PATHS "/usr/include/opencv4")
 find_package(cv_bridge REQUIRED)
 find_library(CRYPTOPP_LIB cryptopp)
+find_library(TEEC_LIB teec)
 
 
 set(PROJECT_SOURCES
@@ -39,6 +40,9 @@ include_directories(
 add_executable(lane_detect_node ${PROJECT_SOURCES})
 ament_target_dependencies(lane_detect_node ${PROJECT_SOURCES_DEPENDENCIES})
 target_link_libraries(lane_detect_node ${CRYPTOPP_LIB})
+target_link_libraries(lane_detect_node ${CRYPTOPP_LIB})
+target_link_libraries(lane_detect_node ${TEEC_LIB})
+
 install(TARGETS 
   lane_detect_node
   DESTINATION lib/${PROJECT_NAME}
